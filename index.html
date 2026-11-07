@@ -147,6 +147,13 @@
     </div>
 
     <div class="card">
+      <div class="row" style="margin-top:0">
+        <label class="small">Piezas <select id="pieceSel"></select></label>
+        <label class="small">Tablero <select id="boardSel"><option value="green">Verde</option><option value="brown">Marrón</option><option value="blue">Azul</option><option value="gray">Gris</option><option value="purple">Morado</option><option value="wood">Madera</option></select></label>
+      </div>
+    </div>
+
+    <div class="card">
       <div id="moves"><span class="small">Aún no hay jugadas</span></div>
       <div class="row">
         <button class="btn" id="copyPgn">Copiar PGN</button>
@@ -172,7 +179,15 @@ let sel=null, lastMove=null, gameOver=false;
 let viewIndex=null;            // null = posición actual
 let cpuLevel=10, online={peer:null,conn:null,ready:false,host:false,lastSeen:0,stale:false};
 
-const pieceUrl=(c,t)=>'url(pieces/'+c+t.toUpperCase()+'.svg)';
+const PIECE_SETS={cburnett:'Clásicas',merida:'Merida',alpha:'Alpha',staunty:'Staunty',cardinal:'Cardinal',california:'California',celtic:'Celtic',fantasy:'Fantasía',pixel:'Pixel',horsey:'Horsey',companion:'Companion',governor:'Governor',tatiana:'Tatiana'};
+const BOARDS={green:['#eeeed2','#6f9a58'],brown:['#f0d9b5','#b58863'],blue:['#dee3e6','#8ca2ad'],gray:['#e8e8e8','#9a9a9a'],purple:['#efefef','#8877b7'],wood:['#e8c99b','#a9703f']};
+let pieceSet='cburnett';
+const pieceUrl=(c,t)=>'url(pieces/'+pieceSet+'/'+c+t.toUpperCase()+'.svg)';
+function pref(k,v){try{if(v===undefined)return localStorage.getItem('ajedrez-'+k);localStorage.setItem('ajedrez-'+k,v);}catch(e){}}
+function applyBoard(name){
+  const b=BOARDS[name]||BOARDS.green;
+  document.documentElement.style.setProperty('--light',b[0]);document.documentElement.style.setProperty('--dark',b[1]);
+}
 let premove=null;
 const $=id=>document.getElementById(id);
 const boardEl=$('board');
@@ -727,6 +742,15 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ================= Inicio ================= */
+(function initLook(){
+  const ps=$('pieceSel');
+  for(const k in PIECE_SETS){const o=document.createElement('option');o.value=k;o.textContent=PIECE_SETS[k];ps.appendChild(o);}
+  const sp=pref('pieces'),sb=pref('board');
+  if(sp&&PIECE_SETS[sp])pieceSet=sp;
+  ps.value=pieceSet;$('boardSel').value=BOARDS[sb]?sb:'green';applyBoard($('boardSel').value);
+  ps.onchange=()=>{pieceSet=ps.value;pref('pieces',pieceSet);render();};
+  $('boardSel').onchange=()=>{pref('board',$('boardSel').value);applyBoard($('boardSel').value);render();};
+})();
 render();updateStatus();initEngine();
 function joinFromHash(){
   if(location.hash.length>1){setMode('online');$('joinCode').value=location.hash.slice(1,6).toUpperCase();joinRoom(location.hash.slice(1,6));}
