@@ -170,7 +170,7 @@ let myColor='w';               // color del jugador (cpu/online)
 let orientation='w';
 let sel=null, lastMove=null, gameOver=false;
 let viewIndex=null;            // null = posición actual
-let cpuLevel=10, online={peer:null,conn:null,ready:false,host:false};
+let cpuLevel=10, online={peer:null,conn:null,ready:false,host:false,lastSeen:0,stale:false};
 
 const pieceUrl=(c,t)=>'url(pieces/'+c+t.toUpperCase()+'.svg)';
 let premove=null;
@@ -289,7 +289,7 @@ function doMove(from,to,promotion,remote){
   if(!m)return;
   lastMove={from:m.from,to:m.to};sel=null;viewIndex=null;
   if(clock.on){ if(game.history().length>=3)clock[m.color]+=clock.inc; clock.ts=performance.now(); }
-  if(mode==='online'&&!remote&&online.conn)online.conn.send({t:'move',from,to,promotion:m.promotion||null});
+  if(mode==='online'&&!remote&&online.conn&&online.conn.open)online.conn.send({t:'move',from,to,promotion:m.promotion||null,n:game.history().length});
   afterMove();
 }
 function afterMove(){
@@ -598,38 +598,92 @@ function code5(){const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0
 function closeOnline(){
   try{online.conn&&online.conn.close();}catch(e){}
   try{online.peer&&online.peer.destroy();}catch(e){}
-  online={peer:null,conn:null,ready:false,host:false};
+  online={peer:null,conn:null,ready:false,host:false,lastSeen:0,stale:false};
   $('roomInfo').innerHTML='';
 }
 function info(h){$('roomInfo').innerHTML=h;}
+/* ---- conexión robusta: reconexión, resincronización y latido ---- */
+function fullGame(){return savedGame||game;}
+function connInfo(warn){
+  info((warn?'<b style="color:#c0392b">'+warn+'</b><br>':'✅ Conectado. ')+'Juegas con '+(myColor==='w'?'blancas':'negras')+'.<br><button class="btn" id="rematch" style="margin-top:6px">Revancha</button>');
+  $('rematch').onclick=()=>online.conn&&online.conn.open&&online.conn.send({t:'rematch'});
+}
+function sendState(withColor){
+  clockTick();
+  const d={t:'state',moves:fullGame().history(),w:clock.w,b:clock.b,over:gameOver||null};
+  if(withColor){d.color=myColor==='w'?'b':'w';d.tc=tcValue;}
+  online.conn.send(d);
+}
+function applyState(d){
+  if(d.color){myColor=d.color;orientation=myColor;}
+  if(d.tc!==undefined){tcValue=d.tc;$('tc').value=tcValue;}
+  const g=new Chess();
+  for(const m of d.moves){if(!g.move(m))break;}
+  game=g;savedGame=null;viewIndex=null;sel=null;premove=null;gameOver=false;cpuBusy=false;
+  const h=g.history({verbose:true});lastMove=h.length?{from:h[h.length-1].from,to:h[h.length-1].to}:null;
+  resetClock();
+  if(clock.on&&d.w!==undefined){clock.w=d.w;clock.b=d.b;clock.ts=performance.now();}
+  online.ready=true;
+  checkEnd();if(d.over&&!gameOver)gameOver=d.over;
+  $('chat').classList.remove('hidden');connInfo();
+  render();updateStatus();renderMoves();
+}
 function attach(conn){
-  online.conn=conn;
+  if(online.conn&&online.conn!==conn){try{online.conn.close();}catch(e){}}
+  online.conn=conn;online.lastSeen=Date.now();online.stale=false;
   conn.on('open',()=>{
-    if(online.host){
+    if(conn!==online.conn||!online.host)return;
+    if(fullGame().history().length>0){      // el rival volvió: retomar la partida donde iba
+      online.ready=true;sendState(true);connInfo();
+      chatAdd('El rival volvió a la partida.','sys');
+    }else{
       myColor=Math.random()<.5?'w':'b';
       conn.send({t:'start',color:myColor==='w'?'b':'w',tc:tcValue});
       beginOnline();
     }
   });
   conn.on('data',d=>{
+    if(conn!==online.conn)return;
+    online.lastSeen=Date.now();
+    if(online.stale){online.stale=false;if(online.ready)connInfo();conn.send({t:'sync'});}
+    if(d.t==='ping')return;
     if(d.t==='start'){myColor=d.color;tcValue=d.tc||'0';$('tc').value=tcValue;beginOnline();}
+    else if(d.t==='state')applyState(d);
+    else if(d.t==='sync')sendState(false);
     else if(d.t==='chat')chatAdd('Rival: '+d.text);
     else if(d.t==='timeout'&&!gameOver){clock[d.color]=0;gameOver='Se acabó el tiempo · ganan '+(d.color==='w'?'las negras':'las blancas');premove=null;stopAnalysis();updateStatus();}
-    else if(d.t==='move'&&!gameOver)doMove(d.from,d.to,d.promotion||undefined,true);
-    else if(d.t==='resign'){gameOver='El rival se rindió · ¡ganaste!';updateStatus();}
+    else if(d.t==='move'){
+      if(gameOver)return;
+      if(viewIndex!==null)gotoMove(1e6);
+      const ok=game.moves({verbose:true}).some(m=>m.from===d.from&&m.to===d.to);
+      if(!ok||(d.n!==undefined&&d.n!==game.history().length+1)){conn.send({t:'sync'});return;}   // desfase: pedir estado
+      doMove(d.from,d.to,d.promotion||undefined,true);
+    }
+    else if(d.t==='resign'){gameOver='El rival se rindió · ¡ganaste!';premove=null;stopAnalysis();updateStatus();}
     else if(d.t==='rematch'){ if(confirm('El rival propone la revancha. ¿Aceptas?')){ if(online.host)swap(); else conn.send({t:'rematchOk'}); } }
     else if(d.t==='rematchOk'){ if(online.host)swap(); }
-    else if(d.t==='swap'){myColor=d.color;orientation=myColor;newGame();}
+    else if(d.t==='swap'){myColor=d.color;orientation=myColor;newGame();connInfo();}
   });
-  conn.on('close',()=>{online.ready=false;if(!gameOver){gameOver='El rival se desconectó';updateStatus();}info('Conexión cerrada.');});
+  conn.on('close',()=>{
+    if(conn!==online.conn)return;          // una conexión vieja que ya reemplazamos
+    online.ready=false;connInfo('⚠ Rival desconectado. Si vuelve a abrir el enlace, retomará la partida.');updateStatus();
+  });
+  conn.on('error',()=>{if(conn===online.conn&&online.ready)connInfo('⚠ Problema de conexión…');});
 }
+setInterval(()=>{
+  const c=online.conn;if(mode!=='online'||!c||!c.open)return;
+  try{c.send({t:'ping'});}catch(e){}
+  if(online.ready&&Date.now()-online.lastSeen>12000&&!online.stale){online.stale=true;connInfo('⚠ Conexión inestable…');}
+},2000);
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&mode==='online'&&online.conn&&online.conn.open&&online.ready)online.conn.send({t:'sync'});
+});
 function swap(){
-  if(online.host){myColor=myColor==='w'?'b':'w';online.conn.send({t:'swap',color:myColor==='w'?'b':'w'});orientation=myColor;newGame();}
+  if(online.host){myColor=myColor==='w'?'b':'w';online.conn.send({t:'swap',color:myColor==='w'?'b':'w'});orientation=myColor;newGame();connInfo();}
 }
 function beginOnline(){
   online.ready=true;orientation=myColor;$('chat').classList.remove('hidden');$('chatlog').innerHTML='';chatAdd('Conectado con tu rival. ¡Buena suerte!','sys');newGame();
-  info('✅ Conectado. Juegas con '+(myColor==='w'?'blancas':'negras')+'. <br><button class="btn" id="rematch" style="margin-top:6px">Revancha</button>');
-  $('rematch').onclick=()=>online.conn&&online.conn.send({t:'rematch'});
+  connInfo();
 }
 $('createRoom').onclick=()=>{
   closeOnline();tcValue=$('tc').value;
@@ -642,6 +696,7 @@ $('createRoom').onclick=()=>{
     info('Código: <b style="font-size:22px;letter-spacing:3px">'+code+'</b><br>Díselo a tu rival, o envía este enlace:<br><input type="text" readonly style="width:100%;text-transform:none;letter-spacing:0;font-size:12px" value="'+link+'" onclick="this.select()"><br>Esperando al rival…');
   });
   peer.on('connection',attach);
+  peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
   peer.on('error',e=>info('Error: '+e.type+(e.type==='unavailable-id'?' — vuelve a intentarlo.':'')));
 };
 function joinRoom(code){
