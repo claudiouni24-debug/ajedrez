@@ -165,8 +165,9 @@
 </main>
 <div id="ghost" class="pc"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="lib/chess.min.js"></script>
+<script src="lib/peerjs.min.js"></script>
+<script src="lib/stockfish-code.js"></script>
 <script>
 "use strict";
 /* ================= Estado ================= */
@@ -390,12 +391,12 @@ let sf=null,sfReady=false,sfBusy=false,sfPending=null,sfCurrent=null,cpuBusy=fal
 const anaLines={};
 async function initEngine(){
   try{
-    const code=await (await fetch(SF_URL)).text();
+    const code=window.SF_CODE||await (await fetch(SF_URL)).text();
     sf=new Worker(URL.createObjectURL(new Blob([code],{type:'application/javascript'})));
     sf.onmessage=e=>onEngine(typeof e.data==='string'?e.data:String(e.data));
     sf.postMessage('uci');
   }catch(err){
-    $('engState').textContent='No se pudo cargar el motor (¿hay conexión a internet?).';
+    $('engState').textContent='No se pudo cargar el motor de ajedrez.';
   }
 }
 function send(c){sf&&sf.postMessage(c);}
@@ -701,6 +702,7 @@ function beginOnline(){
   connInfo();
 }
 $('createRoom').onclick=()=>{
+  if(!navigator.onLine){info('Sin internet: el modo online no está disponible.');return;}
   closeOnline();tcValue=$('tc').value;
   const code=code5();
   const peer=new Peer(PREFIX+code);
@@ -715,6 +717,7 @@ $('createRoom').onclick=()=>{
   peer.on('error',e=>info('Error: '+e.type+(e.type==='unavailable-id'?' — vuelve a intentarlo.':'')));
 };
 function joinRoom(code){
+  if(!navigator.onLine){info('Sin internet: el modo online no está disponible.');return;}
   closeOnline();
   code=code.trim().toUpperCase();if(!code)return;
   const peer=new Peer();online.peer=peer;online.host=false;
