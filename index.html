@@ -673,7 +673,11 @@ document.addEventListener('keydown',e=>{
 
 /* ================= Inicio ================= */
 render();updateStatus();initEngine();
-if(location.hash.length>1){setMode('online');$('joinCode').value=location.hash.slice(1,6).toUpperCase();joinRoom(location.hash.slice(1,6));}
+function joinFromHash(){
+  if(location.hash.length>1){setMode('online');$('joinCode').value=location.hash.slice(1,6).toUpperCase();joinRoom(location.hash.slice(1,6));}
+}
+joinFromHash();
+window.addEventListener('hashchange',joinFromHash);
 </script>
 </body>
 </html>
